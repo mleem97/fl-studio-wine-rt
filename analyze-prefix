@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -u
+
+PREFIX="${WINEPREFIX:-$HOME/.wine}"
+
+if [[ ! -d "$PREFIX/drive_c" ]]; then
+    printf '[ERROR] Wine prefix not found: %s\n' "$PREFIX" >&2
+    exit 1
+fi
+
+export WINEPREFIX="$PREFIX"
+
+printf '\n=== Wine Prefix ===\n%s\n' "$WINEPREFIX"
+
+printf '\n=== Wine Version ===\n'
+wine --version 2>&1 || true
+
+printf '\n=== Windows Version ===\n'
+wine reg query 'HKCU\Software\Wine' /v Version 2>&1 || true
+
+printf '\n=== Wine DLL Overrides ===\n'
+wine reg query 'HKCU\Software\Wine\DllOverrides' 2>&1 || true
+
+printf '\n=== Installed Components ===\n'
+wine reg query 'HKCU\Software\Wine\DllOverrides' /s 2>&1 || true
+
+printf '\n=== Prefix Configuration Files ===\n'
+for file in \
+    "$PREFIX/system.reg" \
+    "$PREFIX/user.reg" \
+    "$PREFIX/userdef.reg" \
+    "$PREFIX/winecfg"
+do
+    if [[ -e "$file" ]]; then
+        stat -c '%n | Modified: %y | Size: %s bytes' "$file"
+    fi
+done
+
+printf '\n=== Audio Configuration ===\n'
+grep -inE 'wineasio|alsa|pulse|pulseaudio|pipewire|audio' \
+    "$PREFIX/user.reg" 2>/dev/null | head -n 80 || true
+
+printf '\n=== Antares OpenGL Settings ===\n'
+find "$PREFIX/drive_c/users" \
+    -path '*/AppData/Roaming/Antares/*.xml' \
+    -type f -print 2>/dev/null |
+while IFS= read -r file; do
+    printf '\n%s\n' "$file"
+    grep -n 'OpenGLPref_ID' "$file" || true
+done
