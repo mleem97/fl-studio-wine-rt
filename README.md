@@ -1,5 +1,15 @@
 # FL Studio on Linux — Custom Wine Launcher
 
+[![Animus Found](https://img.shields.io/badge/Animus%20Found-animusfound.com-1A237E?style=for-the-badge)](https://animusfound.com)
+![Linux](https://img.shields.io/badge/Platform-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
+![Wine](https://img.shields.io/badge/Wine-Staging%2011.16-800000?style=for-the-badge)
+![Architecture](https://img.shields.io/badge/Architecture-x86__64-0078D4?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Experimental-FF4081?style=for-the-badge)
+
+> **Our try to make Open Source part of our Daily Office Time.**
+
+*A community-driven project by [Animus Found](https://animusfound.com), exploring practical open-source solutions for everyday work.*
+
 A custom launcher for running **FL Studio 2026** on Linux using **Wine Staging 11.16 (64-bit)**.
 
 The launcher provides a configurable environment for FL Studio, Windows-based plugins, FL Cloud components, graphics compatibility, audio performance, and session diagnostics.
@@ -7,6 +17,24 @@ The launcher provides a configurable environment for FL Studio, Windows-based pl
 The goal is to improve reliability without replacing a working Wine prefix, applying unverified DLL overrides globally, or forcing experimental compatibility settings on every plugin.
 
 > **Status:** Community-maintained compatibility setup. Results depend on the FL Studio version, Wine build, plugin versions, graphics stack, and desktop session.
+
+---
+
+## About Animus Found
+
+**Animus Found** is our ongoing attempt to make open-source software, Linux, automation, and community-driven development a practical part of our everyday work.
+
+We experiment, build tools, document problems, and share what we learn. Not every solution is perfect, and not every experiment succeeds. The goal is to make useful technology more accessible, improve our workflows, and contribute where we can.
+
+Open source should not just be something we use in our spare time. We want to make it part of how we work every day.
+
+### Our Approach
+
+- **Open Source in everyday work** — use and improve open technologies wherever practical.
+- **Experiment, document, improve** — approach compatibility issues as engineering problems.
+- **Practical over theoretical** — prioritize solutions that work in real production environments.
+- **Share the results** — document limitations and fixes so others can build on them.
+- **Keep learning** — treat failures as opportunities to understand the underlying technology.
 
 ## Features
 
@@ -137,11 +165,13 @@ Diagnostic archives should be stored separately from FL Studio projects and plug
 
 ## References
 
+- [Animus Found](https://animusfound.com)
 - [FL Studio on Linux — Torbuntu](https://github.com/Torbuntu/fl-studio-linux-setup)
 - [DAW-GE-Proton](https://github.com/KitsuneDev/daw-proton-ge)
 - [Kron4ek Wine Builds](https://github.com/Kron4ek/Wine-Builds)
 - [Bottles](https://usebottles.com/)
 - [Wine source repository](https://gitlab.winehq.org/wine/wine)
+- [yabridge](https://github.com/robbert-vdh/yabridge)
 - [KDE Plasma Wayland](https://community.kde.org/Plasma/Wayland)
 - [SDDM](https://github.com/sddm/sddm)
 - [GNOME GDM](https://github.com/GNOME/gdm)
@@ -160,3 +190,13 @@ When reporting a problem, include:
 - Relevant log excerpts and whether the issue also occurs in a clean test prefix.
 
 Avoid sharing entire diagnostic archives publicly without checking them for sensitive information.
+
+## Disclaimer
+
+FL Studio is developed by Image-Line. Wine and the referenced open-source projects are maintained by their respective authors. Animus Found is an independent project and is not affiliated with or endorsed by Image-Line.
+
+---
+
+**Animus Found** — [animusfound.com](https://animusfound.com)
+
+*Our try to make Open Source part of our Daily Office Time.*
