@@ -1,0 +1,428 @@
+
+#!/usr/bin/env bash
+#
+# FL Studio 2026 — Wine Staging Launcher
+# ======================================
+#
+# Zweck:
+#   Startet FL Studio 2026 mit dem konfigurierten Wine-Prefix,
+#   optionalem DXVK-Rendering, konservativen WebView2-Argumenten,
+#   PipeWire-JACK-Anbindung und optionalen Systempriorisierungen.
+#
+# Plattform:
+#   Linux / KDE Plasma / Wine Staging
+#
+# WICHTIG:
+#   Dieses Skript ist ein benutzerdefinierter Launcher.
+#   FL_DXVK, FL_WEBVIEW_NATIVE und FL_RT sind eigene Schalter
+#   dieses Skripts, keine offiziellen FL-Studio-Optionen.
+#
+# ============================================================
+# KONFIGURATION UND UMGEBUNGSVARIABLEN
+# ============================================================
+#
+# Vom Launcher ausgewertete Variablen:
+#
+# FL_DXVK
+#   Standard: 1
+#   1 = DXVK für DXGI/D3D11 verwenden (native DLLs bevorzugen).
+#   0 = WineD3D-Builtin für DXGI/D3D11 verwenden.
+#   Hinweis: Die Wirkung hängt von den installierten DLLs ab.
+#
+# FL_WEBVIEW_NATIVE
+#   Standard: 0
+#   0 = Die unten definierten konservativen Chromium-Argumente
+#       zusätzlich an WebView2 übergeben.
+#   1 = Diese zusätzlichen Argumente nicht durch dieses Skript
+#       setzen. Das garantiert keine Hardwarebeschleunigung.
+#
+# FL_RT
+#   Standard: 0
+#   0 = Keine zusätzliche SCHED_RR-Priorität für den Launcher.
+#   1 = Versuchen, den Launcher auf SCHED_RR, Priorität 20,
+#       umzustellen. Erfordert passende Systemberechtigungen.
+#   Benutzerdefinierte Option; nicht mit FLs eigenem Audio-RT
+#   oder einer offiziellen FL-Option verwechseln.
+#
+# DXVK_HUD
+#   Standard: 0
+#   Von DXVK ausgewertete HUD-Konfiguration.
+#   0 = kein HUD. Andere Werte können Diagnoseanzeigen aktivieren.
+#
+# WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+#   Von WebView2 ausgewertete zusätzliche Chromium-Argumente.
+#   Das Skript ergänzt diese um seine konservativen Standardflags,
+#   sofern FL_WEBVIEW_NATIVE nicht auf 1 steht.
+#
+# WINEDEBUG
+#   Standard: -all
+#   Steuert Wine-Diagnoseausgaben. -all reduziert die Protokollmenge.
+#
+# PIPEWIRE_LATENCY
+#   Standard: 256/48000
+#   PipeWire-Format: Puffergröße/Samplerate.
+#   256 Samples bei 48 kHz entsprechen rechnerisch ca. 5,33 ms
+#   pro Pufferperiode, nicht der gesamten Audio-Roundtrip-Latenz.
+#
+# LD_LIBRARY_PATH
+#   Wird bei vorhandenem PipeWire-JACK-Verzeichnis um dessen
+#   Bibliothekspfad ergänzt, damit WineASIO den passenden JACK-
+#   Client laden kann.
+#
+# Bereits vorhandene Variablen:
+#   WINEDLLOVERRIDES wird um die DXGI-/D3D11-Auswahl ergänzt.
+#   PATH wird um das verwendete Wine-Binärverzeichnis ergänzt.
+#   WINEPREFIX und WINELOADER werden hier festgelegt.
+#
+# Interne Launcher-Variablen:
+#   WINE, LOG, RENDERER_INFO, FL, PREV_POWER_PROFILE,
+#   WINE_PID, OOM_HELPER_PID und STATUS.
+#
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. WINE-UMGEBUNG
+# ------------------------------------------------------------
+
+# Gemeinsamer Wine-Prefix für FL Studio und die dort installierten
+# Windows-Plugins. Nicht versehentlich einen zweiten Prefix verwenden.
+export WINEPREFIX="$HOME/.wine"
+
+# Explizite Wine-Staging-Installation.
+# WINELOADER wird von Wine-Komponenten als Pfadangabe verwendet.
+export WINELOADER="/opt/wine-11.16-staging-amd64/bin/wine"
+
+# Stellt sicher, dass die zugehörigen Wine-Werkzeuge zuerst
+# über PATH gefunden werden.
+export PATH="/opt/wine-11.16-staging-amd64/bin:$PATH"
+
+# Wine-Programmdatei, die zum Starten verwendet wird.
+WINE="/opt/wine-11.16-staging-amd64/bin/wine"
+
+# Persistentes Startprotokoll.
+LOG="$HOME/.local/state/flstudio-wine/launch.log"
+
+
+# ------------------------------------------------------------
+# 2. GRAFIK: DXVK ODER WINED3D
+# ------------------------------------------------------------
+
+# DXVK übersetzt Direct3D-Aufrufe in Vulkan.
+# WineD3D verwendet den Wine-Grafikpfad für Direct3D.
+#
+# Für dieses Setup ist DXVK der Standard, weil Serum 2 und OTT
+# damit wieder dargestellt werden.
+#
+# dxgi,d3d11=n,b:
+#   native DLL bevorzugen; bei Bedarf Builtin-Fallback zulassen.
+#
+# dxgi,d3d11=b:
+#   Wine-Builtin-DLLs bevorzugen.
+#
+# Bestehende DLL-Overrides werden hinten angefügt.
+#
+# d2d1 wird absichtlich NICHT global überschrieben:
+# WebView2 und bestimmte Plugin-Oberflächen können davon abhängen.
+
+if [[ "${FL_DXVK:-1}" == "1" ]]; then
+    export WINEDLLOVERRIDES="dxgi,d3d11=n,b;${WINEDLLOVERRIDES:-}"
+    export DXVK_HUD="${DXVK_HUD:-0}"
+    RENDERER_INFO="DXVK (FL_DXVK=1)"
+else
+    export WINEDLLOVERRIDES="dxgi,d3d11=b;${WINEDLLOVERRIDES:-}"
+    RENDERER_INFO="WineD3D-builtin"
+fi
+
+
+# ------------------------------------------------------------
+# 3. WEBVIEW2 / FL CLOUD / FL SOUNDS
+# ------------------------------------------------------------
+
+# WebView2 verwendet Chromium zur Darstellung eingebetteter
+# Webinhalte. Das betrifft nicht automatisch jedes Plugin.
+#
+# Standardmäßig wird ein konservativer Software-Rendering-Pfad
+# erzwungen, um bestimmte schwarze/weiße WebView-Flächen zu umgehen.
+#
+# Diese Flags können die GPU-Beschleunigung einschränken und dadurch
+# bei animierten Oberflächen oder Hover-Effekten langsamer wirken.
+#
+# FL_WEBVIEW_NATIVE=1 überspringt nur die nachfolgende Zuweisung.
+# Es garantiert nicht, dass WebView2 Hardwarebeschleunigung nutzt.
+#
+# Bereits vorhandene zusätzliche Browserargumente werden angefügt.
+# Wenn sie dieselben Optionen mehrfach enthalten, kann das Ergebnis
+# von Chromium bzw. WebView2 abhängen.
+
+if [[ "${FL_WEBVIEW_NATIVE:-0}" != "1" ]]; then
+    export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--disable-gpu --disable-gpu-compositing --disable-d3d11 --disable-gpu-sandbox --no-sandbox --disable-dwm-composition --use-angle=swiftshader --enable-unsafe-swiftshader ${WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:-}"
+fi
+
+
+# ------------------------------------------------------------
+# 4. WINE-LOGGING
+# ------------------------------------------------------------
+
+# Standardmäßig keine umfangreiche Wine-Debugausgabe.
+# Zum Diagnostizieren kann WINEDEBUG beim Start überschrieben werden.
+export WINEDEBUG="${WINEDEBUG:--all}"
+
+
+# ------------------------------------------------------------
+# 5. PIPEWIRE-JACK / WINEASIO
+# ------------------------------------------------------------
+
+# WineASIO lädt libjack dynamisch.
+# Wenn PipeWire-JACK installiert ist, soll dessen Clientbibliothek
+# zuerst gefunden werden, statt versehentlich eine andere JACK-
+# Bibliothek zu laden.
+#
+# Nur der vorhandene 64-Bit-Pfad wird hier berücksichtigt.
+# Das passt zum FL64.exe-Prozess und zu WineASIO64.
+
+if [[ -d /usr/lib/x86_64-linux-gnu/pipewire-0.3/jack ]]; then
+    export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu/pipewire-0.3/jack${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
+# Vorgabe für PipeWire-JACK, falls vom Benutzer nicht bereits gesetzt.
+# 256/48000 = 256 Samples bei 48.000 Samples pro Sekunde.
+export PIPEWIRE_LATENCY="${PIPEWIRE_LATENCY:-256/48000}"
+
+
+# ------------------------------------------------------------
+# 6. FL-STUDIO-PFAD ERMITTELN
+# ------------------------------------------------------------
+
+# Primärer Installationspfad im Wine-Prefix.
+FL="$HOME/.wine/drive_c/Program Files/Image-Line/FL Studio 2026/FL64.exe"
+
+# Erster Fallback: Dokumente-Verzeichnis.
+if [[ ! -f "$FL" ]]; then
+    FL="$HOME/Dokumente/Image-Line/FL Studio 2026/FL64.exe"
+fi
+
+# Letzter Fallback: nach FL64.exe suchen und einen Treffer
+# auswählen, dessen Pfad "2026" enthält.
+#
+# Hinweis: Bei mehreren Installationen wird nur der erste Treffer
+# verwendet. Das ist keine Versionsprüfung der EXE selbst.
+
+if [[ ! -f "$FL" ]]; then
+    FL="$(find "$HOME/.wine/drive_c" "$HOME/Dokumente/Image-Line" \
+        -type f -iname FL64.exe 2>/dev/null \
+        | grep -i '2026' \
+        | head -n1)"
+fi
+
+# Ohne gültige EXE nicht fortfahren.
+if [[ -z "$FL" || ! -f "$FL" ]]; then
+    notify-send "FL Studio 2026" "FL64.exe wurde nicht gefunden."
+    exit 1
+fi
+
+
+# ------------------------------------------------------------
+# 7. LOG-VERZEICHNIS ANLEGEN
+# ------------------------------------------------------------
+
+# Das Log liegt außerhalb des Wine-Prefix und bleibt daher
+# unabhängig von der Plugin-Installation erhalten.
+mkdir -p "$(dirname "$LOG")"
+
+
+# ------------------------------------------------------------
+# 8. PROZESS- UND SYSTEMPRIORISIERUNG
+# ------------------------------------------------------------
+
+# FL_RT ist ein eigener, optionaler Launcher-Schalter.
+#
+# Standardmäßig wird keine zusätzliche SCHED_RR-Priorität auf den
+# Launcher angewendet. FL Studio verwaltet seine eigenen Audio-
+# Threads über den von der Anwendung vorgesehenen Mechanismus.
+#
+# FL_RT=1 versucht stattdessen, den Launcher-Prozess auf SCHED_RR,
+# Priorität 20, umzustellen. Ob das erlaubt ist, hängt von den
+# Linux-Echtzeitlimits und Benutzerberechtigungen ab.
+#
+# Dies ist keine Garantie für bessere Audioperformance. Echtzeit-
+# Prioritäten können bei Fehlkonfiguration andere Prozesse behindern.
+
+if [[ "${FL_RT:-0}" == "1" ]]; then
+    if command -v chrt >/dev/null 2>&1; then
+        if chrt -r -p 20 $$ 2>/dev/null; then
+            echo "Audio-RT: SCHED_RR prio 20 aktiv (FL_RT=1)" >> "$LOG"
+        else
+            echo "Audio-RT: chrt nicht möglich" >> "$LOG"
+        fi
+    fi
+else
+    echo "Audio-RT: nur FL-eigene Audio-Threads (Standard)" >> "$LOG"
+fi
+
+# Disk-I/O-Priorität:
+# Best-Effort-Versuch, den aktuellen Launcher auf die höchste
+# Priorität der Klasse "Best Effort" zu setzen.
+#
+# Das kann bei Sample-Streaming helfen, garantiert aber keine
+# schnellere Festplatte oder geringere Audio-Latenz.
+#
+# Fehler werden absichtlich ignoriert, wenn ionice nicht verfügbar
+# oder die Änderung nicht möglich ist.
+
+if command -v ionice >/dev/null 2>&1; then
+    ionice -c2 -n0 -p $$ 2>/dev/null || true
+fi
+
+
+# ------------------------------------------------------------
+# 9. CPU-ENERGIEPROFIL
+# ------------------------------------------------------------
+
+# Vorhandenes Profil sichern, dann nach Möglichkeit Performance
+# auswählen. Nach dem Beenden wird das vorherige Profil restauriert.
+#
+# powerprofilesctl muss installiert sein und das System muss den
+# Wechsel unterstützen. Fehler führen nicht zum Abbruch.
+
+PREV_POWER_PROFILE=""
+
+if command -v powerprofilesctl >/dev/null 2>&1; then
+    PREV_POWER_PROFILE="$(powerprofilesctl get 2>/dev/null || true)"
+
+    if ! powerprofilesctl set performance 2>/dev/null; then
+        PREV_POWER_PROFILE=""
+    fi
+fi
+
+
+# ------------------------------------------------------------
+# 10. STARTINFORMATIONEN PROTOKOLLIEREN
+# ------------------------------------------------------------
+
+{
+    echo
+    echo "=================================================="
+    echo "Start: $(date)"
+    echo "Wine: $("$WINE" --version)"
+    echo "Prefix: $WINEPREFIX"
+    echo "FL: $FL"
+    echo "Renderer: ${RENDERER_INFO:-unbekannt}"
+    echo "FL_DXVK: ${FL_DXVK:-1}"
+    echo "FL_WEBVIEW_NATIVE: ${FL_WEBVIEW_NATIVE:-0}"
+    echo "FL_RT: ${FL_RT:-0}"
+    echo "PIPEWIRE_LATENCY: ${PIPEWIRE_LATENCY}"
+    echo "WINEDEBUG: ${WINEDEBUG}"
+    echo "=================================================="
+} >> "$LOG"
+
+
+# ------------------------------------------------------------
+# 11. ARBEITSVERZEICHNIS
+# ------------------------------------------------------------
+
+# FL Studio wird aus seinem eigenen Installationsverzeichnis
+# gestartet. Das kann für relative Ressourcenpfade wichtig sein.
+cd "$(dirname "$FL")" || exit 1
+
+
+# ------------------------------------------------------------
+# 12. CPU-GOVERNOR
+# ------------------------------------------------------------
+
+# Benutzerdefinierter Helfer für den CPU-Governor.
+# Er wird ohne interaktive Passwortabfrage gestartet.
+#
+# Falls der Helfer nicht existiert oder sudo die Aktion nicht
+# erlaubt, wird der Fehler ignoriert.
+#
+# Erwartete lokale Integration:
+#   /usr/local/bin/fl-governor-performance
+#
+# Das ist kein Bestandteil von FL Studio oder Wine.
+
+sudo -n /usr/local/bin/fl-governor-performance >/dev/null 2>&1 || true
+
+
+# ------------------------------------------------------------
+# 13. FL STUDIO STARTEN
+# ------------------------------------------------------------
+
+# "$@" gibt übergebene Argumente an FL Studio weiter.
+# Die Ausgabe von Wine und FL wird an das Startlog angehängt.
+#
+# Der Prozess wird im Hintergrund gestartet, damit dieses Skript
+# anschließend auf ihn warten und nach dem Ende aufräumen kann.
+
+"$WINE" "$FL" "$@" >> "$LOG" 2>&1 &
+WINE_PID=$!
+
+
+# ------------------------------------------------------------
+# 14. OOM-SCHUTZ
+# ------------------------------------------------------------
+
+# Nach 8 Sekunden wird ein benutzerdefinierter Helfer aufgerufen,
+# der FL Studio/Wine gegen den Linux OOM-Killer absichern soll.
+#
+# Erwartete lokale Integration:
+#   /usr/local/bin/fl-oom-protect
+#
+# Die konkrete Wirkung hängt vom Inhalt des Helfers und den
+# konfigurierten sudo-Berechtigungen ab.
+#
+# Dieses Skript wartet nicht auf den OOM-Helfer, sondern beendet
+# ihn nach dem Ende des Wine-Prozesses, soweit noch aktiv.
+
+(
+    sleep 8
+    sudo -n /usr/local/bin/fl-oom-protect >> "$LOG" 2>&1
+) &
+OOM_HELPER_PID=$!
+
+
+# ------------------------------------------------------------
+# 15. AUF FL STUDIO WARTEN
+# ------------------------------------------------------------
+
+# Auf den gestarteten Wine-Prozess warten.
+# STATUS enthält dessen Rückgabestatus.
+wait "$WINE_PID"
+STATUS=$?
+
+# Den noch laufenden OOM-Helfer beenden.
+kill "$OOM_HELPER_PID" 2>/dev/null || true
+
+
+# ------------------------------------------------------------
+# 16. FEHLER MELDEN
+# ------------------------------------------------------------
+
+# Bei einem Rückgabestatus ungleich 0 eine Desktopbenachrichtigung
+# mit Verweis auf das Log anzeigen.
+if [[ $STATUS -ne 0 ]]; then
+    notify-send "FL Studio 2026" \
+        "FL Studio wurde mit Fehlercode $STATUS beendet. Log: $LOG"
+fi
+
+
+# ------------------------------------------------------------
+# 17. ENERGIEPROFIL RESTAURIEREN
+# ------------------------------------------------------------
+
+# Nur dann zurücksetzen, wenn ein vorheriges Profil erfolgreich
+# ermittelt und für die spätere Wiederherstellung gespeichert wurde.
+#
+# Fehler bei der Wiederherstellung verhindern den Abschluss nicht.
+if [[ -n "${PREV_POWER_PROFILE:-}" ]] &&
+   command -v powerprofilesctl >/dev/null 2>&1; then
+    powerprofilesctl set "$PREV_POWER_PROFILE" 2>/dev/null || true
+fi
+
+
+# ------------------------------------------------------------
+# 18. EXIT-STATUS
+# ------------------------------------------------------------
+
+# Rückgabestatus des Wine-/FL-Starts an das aufrufende Programm
+# weiterreichen.
+exit "$STATUS"
